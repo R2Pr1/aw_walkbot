@@ -13,6 +13,8 @@ local AIMBOT_TIMEOUT = 30;
 local WALKBOT_ENABLE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ENABLE_CB", "Enable Walkbot", false);
 local WALKBOT_DRAWING_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_DRAWING_CB", "Walkbot Drawing", false);
 local WALKBOT_TARGET_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_TARGET_CB", "Walkbot Target Enemies", false);
+gui.Text(gui.Reference("MISC", "AUTOMATION", "Movement"), "Map override (map name):");
+local WALKBOT_MAP_OVERRIDE = gui.Editbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_MAP_OVERRIDE", "");
 
 local last_command = globals.TickCount();
 local aimbot_target_change_time = globals.TickCount();
@@ -170,6 +172,7 @@ function moveEventHandler(cmd)
         else
             end_point = map['nodes'][math.random(1, #map['nodes'])];
         end
+
         path_to_follow = path(start_point, end_point, map['nodes'], map['edges'], false);
 
         if (path_to_follow == nil) then
@@ -328,10 +331,14 @@ function getClosestPlayer(my_x, my_y, my_z)
 end
 
 function getActiveMap()
+    local map_override = WALKBOT_MAP_OVERRIDE:GetValue();
     local map_name = client.GetConVar("host_map");
-
-    if (map_name == nil) then
+    if (map_name == nil and map_override ~= "") then
         return;
+    end
+
+    if (map_override ~= "") then
+        map_name = map_override .. ".bsp";
     end
 
     return maps[map_name];
