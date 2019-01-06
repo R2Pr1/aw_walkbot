@@ -4,11 +4,17 @@ RunScript("walkbot_mesh.lua");
 local RESET_TIMEOUT = 30;
 local RETARGET_TIMEOUT = 150;
 local STUCK_TIMEOUT = 100;
-local MESHWALK_MAX_DISTANCE = 300;
+local MESHWALK_MIN_DISTANCE = 15;
 local STUCK_SPEED_MAX = 10;
 local SHOT_TIMEOUT = 20;
 local COMMAND_TIMEOUT = 100;
-local AIMBOT_TIMEOUT = 30;
+local AIMBOT_TIMEOUT = 25;
+local RELOAD_THRESHOLD_PISTOL = 8;
+local RELOAD_THRESHOLD_SNIPER = 3;
+local RELOAD_THRESHOLD_SMG = 13;
+local RELOAD_THRESHOLD_RIFLE = 10;
+local RELOAD_THRESHOLD_SHOTGUN = 3;
+local RELOAD_THRESHOLD_HEAVY = 30;
 
 local WALKBOT_ENABLE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ENABLE_CB", "Enable Walkbot", false);
 local WALKBOT_DRAWING_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_DRAWING_CB", "Walkbot Drawing", false);
@@ -79,6 +85,7 @@ function moveEventHandler(cmd)
         last_shot = nil;
         is_shooting = false;
         last_command = nil;
+        aimbot_target_change_time = nil;
         path_to_follow = nil;
         current_index = nil;
         last_reset = nil;
@@ -94,9 +101,71 @@ function moveEventHandler(cmd)
         last_command = globals.TickCount();
     end
 
+    if (last_target_time ~= nil and last_target_time > globals.TickCount()) then
+        last_target_time = globals.TickCount();
+    end
+
+    if (aimbot_target_change_time ~= nil and aimbot_target_change_time > globals.TickCount()) then
+        aimbot_target_change_time = globals.TickCount();
+    end
+
     if (last_shot ~= nil and last_shot > globals.TickCount()) then
         last_shot = globals.TickCount();
     end
+
+    local my_weapon = me:GetPropEntity("m_hActiveWeapon");
+
+    if (my_weapon == nil) then
+        if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
+            client.Command("slot2", true);
+            client.Command("slot1", true);
+            last_command = globals.TickCount();
+        end
+        return;
+    end
+
+    if (my_weapon ~= nil) then
+        local weapon_name = my_weapon:GetClass();
+        weapon_name = weapon_name:gsub("CWeapon", "");
+        weapon_name = weapon_name:lower();
+
+        if (weapon_name:sub(1, 1) == "c") then
+            weapon_name = weapon_name:sub(2)
+        end
+
+        local ammo = my_weapon:GetPropInt("m_iClip1");
+        local ammo_reserve = my_weapon:GetPropInt("m_iPrimaryReserveAmmoCount");
+
+        if (ammo == 0 and ammo_reserve == 0) then
+            if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
+                client.Command("drop", true);
+                last_command = globals.TickCount();
+            end
+        end
+
+        if (weapon_name == "c4" or weapon_name == "smokegrenade" or weapon_name == "knife" or weapon_name == "flashbang" or weapon_name == "molotovgrenade" or weapon_grenade == "hegrenade") then
+            if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
+                client.Command("slot2", true);
+                client.Command("slot1", true);
+                last_command = globals.TickCount();
+            end
+        end
+
+        -- Determine if we need to reload
+        if (not is_shooting and aimbot_target == nil) then
+            if (
+                ((weapon_name == "glock" or weapon_name == "elite" or weapon_name == "p250" or weapon_name == "cz75a" or weapon_name == "tec9" or weapon_name == "hkp2000" or weapon_name == "fiveseven") and ammo < RELOAD_THRESHOLD_PISTOL)
+                or ((weapon_name == "mac10" or weapon_name == "mp7" or weapon_name == "ump45" or weapon_name == "p90" or weapon_name == "bizon" or weapon_name == "mp9") and ammo < RELOAD_THRESHOLD_SMG)
+                or ((weapon_name == "deagle" or weapon_name == "awp" or weapon_name == "g3sg1" or weapon_name == "ssg08" or weapon_name == "scar20") and ammo < RELOAD_THRESHOLD_SNIPER)
+                or ((weapon_name == "nova" or weapon_name == "xm1014" or weapon_name == "sawedoff" or weapon_name == "mag7") and ammo < RELOAD_THRESHOLD_SHOTGUN)
+                or ((weapon_name == "m249" or weapon_name == "negev") and ammo < RELOAD_THRESHOLD_HEAVY)
+                or ((weapon_name == "galilar" or weapon_name == "ak47" or weapon_name == "sg556" or weapon_name == "famas" or weapon_name == "m4a1" or weapon_name == "m4a1_silencer" or weapon_name == "aug") and ammo < RELOAD_THRESHOLD_RIFLE)
+            ) then
+                cmd:SetButtons(8192);
+            end
+        end
+    end
+
 
     local my_x, my_y, my_z = me:GetAbsOrigin();
 
@@ -107,7 +176,7 @@ function moveEventHandler(cmd)
         return;
     end
 
-    if (aimbot_target ~= nil and globals.TickCount() - aimbot_target_change_time < AIMBOT_TIMEOUT) then
+    if (aimbot_target ~= nil and (aimbot_target_change_time == nil or globals.TickCount() - aimbot_target_change_time < AIMBOT_TIMEOUT)) then
         return;
     elseif(aimbot_target ~= nil) then
         aimbot_target = nil;
@@ -222,7 +291,7 @@ function moveEventHandler(cmd)
     local distance = getDistanceToTarget(my_x, my_y, 0, target["x"], target["y"], 0);
 
     -- We're close enough to the center of the mesh, pick the next target for 'smoothing' reasons
-    if (distance < 25) then
+    if (distance < MESHWALK_MIN_DISTANCE) then
         current_index = current_index + 1;
         return;
     end
