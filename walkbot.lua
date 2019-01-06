@@ -19,7 +19,8 @@ local RELOAD_THRESHOLD_HEAVY = 30;
 local WALKBOT_ENABLE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ENABLE_CB", "Enable Walkbot", false);
 local WALKBOT_DRAWING_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_DRAWING_CB", "Walkbot Drawing", false);
 local WALKBOT_TARGET_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_TARGET_CB", "Walkbot Target Enemies", false);
-gui.Text(gui.Reference("MISC", "AUTOMATION", "Movement"), "Map override (map name):");
+local WALKBOT_AUTORELOAD_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTORELOAD_CB", "Walkbot Smart Reload", false);
+gui.Text(gui.Reference("MISC", "AUTOMATION", "Movement"), "Walkbot Map override (map name):");
 local WALKBOT_MAP_OVERRIDE = gui.Editbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_MAP_OVERRIDE", "");
 
 local last_command = globals.TickCount();
@@ -115,7 +116,7 @@ function moveEventHandler(cmd)
 
     local my_weapon = me:GetPropEntity("m_hActiveWeapon");
 
-    if (my_weapon == nil) then
+    if (WALKBOT_AUTORELOAD_CB:GetValue() == true and my_weapon == nil) then
         if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
             client.Command("slot2", true);
             client.Command("slot1", true);
@@ -124,7 +125,7 @@ function moveEventHandler(cmd)
         return;
     end
 
-    if (my_weapon ~= nil) then
+    if (WALKBOT_AUTORELOAD_CB:GetValue() == true and my_weapon ~= nil) then
         local weapon_name = my_weapon:GetClass();
         weapon_name = weapon_name:gsub("CWeapon", "");
         weapon_name = weapon_name:lower();
@@ -183,19 +184,6 @@ function moveEventHandler(cmd)
     end
 
     if (not me:IsAlive()) then
-        -- If we're not on a team yet, quickly join a random team so we can start
-        if (me:GetTeamNumber() == 0 and (last_command == nil or globals.TickCount() - last_command > COMMAND_TIMEOUT)) then
-            local rnd = math.random(0, 1);
-
-            -- 0=CT,1=SPECTATOR,2=T
-            if (rnd == 1) then
-                rnd = 2
-            end
-
-            client.Command("jointeam " .. rnd, true);
-            last_command = globals.TickCount();
-        end
-
         path_to_follow = nil;
         current_index = nil;
         return;
