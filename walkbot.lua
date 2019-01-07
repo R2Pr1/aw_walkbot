@@ -20,8 +20,7 @@ local WALKBOT_ENABLE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Move
 local WALKBOT_DRAWING_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_DRAWING_CB", "Walkbot Drawing", false);
 local WALKBOT_TARGET_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_TARGET_CB", "Walkbot Target Enemies", false);
 local WALKBOT_AUTORELOAD_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTORELOAD_CB", "Walkbot Smart Reload", false);
-gui.Text(gui.Reference("MISC", "AUTOMATION", "Movement"), "Walkbot Map override (map name):");
-local WALKBOT_MAP_OVERRIDE = gui.Editbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_MAP_OVERRIDE", "");
+local WALKBOT_AUTODEFUSE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTODEFUSE_CB", "Walkbot Autodefuse", false);
 
 local last_command = globals.TickCount();
 local aimbot_target_change_time = globals.TickCount();
@@ -31,9 +30,15 @@ local last_reset = globals.TickCount();
 local last_shot = globals.TickCount();
 local aimbot_target;
 local is_shooting;
+local is_defusing = false;
+local moving_to_defuse = false;
+local round_started;
 
+local current_map;
+local current_map_name;
 local next_target;
 local path_to_follow;
+local next_point;
 local current_index;
 
 function drawEventHandler()
@@ -79,10 +84,28 @@ function moveEventHandler(cmd)
         return;
     end
 
-    local map = getActiveMap();
+    local active_map_name = engine.GetMapName();
+    -- If we don't have an active map, stop
+    if (active_map_name == nil) then
+        return;
+    end
+
+    if (current_map_name ~= active_map_name) then
+        -- Newer format (de_dust2)
+        current_map = maps[active_map_name];
+
+        -- Support for older versions that use the naming convention de_dust.bsp
+        if (current_map == nil) then
+            current_map = maps[active_map_name .. ".bsp"];
+        end
+
+        current_map_name = active_map_name;
+    end
+
     local me = entities.GetLocalPlayer();
 
-    if (map == nil or me == nil) then
+    if (current_map == nil or me == nil) then
+        round_started = nil;
         last_shot = nil;
         is_shooting = false;
         last_command = nil;
@@ -91,82 +114,20 @@ function moveEventHandler(cmd)
         current_index = nil;
         last_reset = nil;
         next_target = nil;
+        is_defusing = false;
+        next_point = nil;
+        moving_to_defuse = false;
         return;
     end
 
-    if (last_reset ~= nil and last_reset > globals.TickCount()) then
-        last_reset = globals.TickCount();
+    if (round_started == false) then
+        return;
     end
 
-    if (last_command ~= nil and last_command > globals.TickCount()) then
-        last_command = globals.TickCount();
-    end
-
-    if (last_target_time ~= nil and last_target_time > globals.TickCount()) then
-        last_target_time = globals.TickCount();
-    end
-
-    if (aimbot_target_change_time ~= nil and aimbot_target_change_time > globals.TickCount()) then
-        aimbot_target_change_time = globals.TickCount();
-    end
-
-    if (last_shot ~= nil and last_shot > globals.TickCount()) then
-        last_shot = globals.TickCount();
-    end
+    doTimerReset();
 
     local my_weapon = me:GetPropEntity("m_hActiveWeapon");
-
-    if (WALKBOT_AUTORELOAD_CB:GetValue() == true and my_weapon == nil) then
-        if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
-            client.Command("slot2", true);
-            client.Command("slot1", true);
-            last_command = globals.TickCount();
-        end
-        return;
-    end
-
-    if (WALKBOT_AUTORELOAD_CB:GetValue() == true and my_weapon ~= nil) then
-        local weapon_name = my_weapon:GetClass();
-        weapon_name = weapon_name:gsub("CWeapon", "");
-        weapon_name = weapon_name:lower();
-
-        if (weapon_name:sub(1, 1) == "c") then
-            weapon_name = weapon_name:sub(2)
-        end
-
-        local ammo = my_weapon:GetPropInt("m_iClip1");
-        local ammo_reserve = my_weapon:GetPropInt("m_iPrimaryReserveAmmoCount");
-
-        if (ammo == 0 and ammo_reserve == 0) then
-            if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
-                client.Command("drop", true);
-                last_command = globals.TickCount();
-            end
-        end
-
-        if (weapon_name == "c4" or weapon_name == "smokegrenade" or weapon_name == "knife" or weapon_name == "flashbang" or weapon_name == "molotovgrenade" or weapon_grenade == "hegrenade") then
-            if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
-                client.Command("slot2", true);
-                client.Command("slot1", true);
-                last_command = globals.TickCount();
-            end
-        end
-
-        -- Determine if we need to reload
-        if (not is_shooting and aimbot_target == nil) then
-            if (
-                ((weapon_name == "glock" or weapon_name == "elite" or weapon_name == "p250" or weapon_name == "cz75a" or weapon_name == "tec9" or weapon_name == "hkp2000" or weapon_name == "fiveseven") and ammo < RELOAD_THRESHOLD_PISTOL)
-                or ((weapon_name == "mac10" or weapon_name == "mp7" or weapon_name == "ump45" or weapon_name == "p90" or weapon_name == "bizon" or weapon_name == "mp9") and ammo < RELOAD_THRESHOLD_SMG)
-                or ((weapon_name == "deagle" or weapon_name == "awp" or weapon_name == "g3sg1" or weapon_name == "ssg08" or weapon_name == "scar20") and ammo < RELOAD_THRESHOLD_SNIPER)
-                or ((weapon_name == "nova" or weapon_name == "xm1014" or weapon_name == "sawedoff" or weapon_name == "mag7") and ammo < RELOAD_THRESHOLD_SHOTGUN)
-                or ((weapon_name == "m249" or weapon_name == "negev") and ammo < RELOAD_THRESHOLD_HEAVY)
-                or ((weapon_name == "galilar" or weapon_name == "ak47" or weapon_name == "sg556" or weapon_name == "famas" or weapon_name == "m4a1" or weapon_name == "m4a1_silencer" or weapon_name == "aug") and ammo < RELOAD_THRESHOLD_RIFLE)
-            ) then
-                cmd:SetButtons(8192);
-            end
-        end
-    end
-
+    doSmartReload(my_weapon, cmd);
 
     local my_x, my_y, my_z = me:GetAbsOrigin();
 
@@ -189,48 +150,77 @@ function moveEventHandler(cmd)
         return;
     end
 
-    -- If we've been stopped for a while, let's try to get unstuck
-    if (speed_slow_since ~= nil) then
-        if (globals.TickCount() - speed_slow_since > STUCK_TIMEOUT) then
-            path_to_follow = nil;
-            current_index = nil;
-            speed_slow_since = nil;
-        elseif (globals.TickCount() - speed_slow_since > 60) then
-            -- Crouch and shoot (in case there is a vent)
-            cmd:SetButtons(4);
-            cmd:SetButtons(1);
-        elseif (globals.TickCount() - speed_slow_since > 20) then
-            -- Jump
-            cmd:SetButtons(2);
-        elseif (globals.TickCount() - speed_slow_since > 10) then
-            cmd:SetSideMove(250);
-        end
-    end
+    doStuckCheck(cmd);
 
+    local closest_enemy = getClosestPlayer(my_x, my_y, my_z);
+    -- Auto enemy targeting
     if (WALKBOT_TARGET_CB:GetValue() == true and (last_target_time == nil or globals.TickCount() - last_target_time > RETARGET_TIMEOUT)) then
-        local enemy = getClosestPlayer(my_x, my_y, my_z);
-        if (enemy ~= nil) then
-            local ex, ey, ez = enemy:GetAbsOrigin();
+        if (closest_enemy ~= nil) then
+            local ex, ey, ez = closest_enemy:GetAbsOrigin();
             path_to_follow = nil;
             current_index = nil;
             last_target_time = globals.TickCount();
-            next_target = getClosestMesh(ex, ey, ez, map);
+            next_target = getClosestMesh(ex, ey, ez);
+        end
+    end
+
+    -- Auto defusing
+    if (WALKBOT_AUTODEFUSE_CB:GetValue() == true and me:GetTeamNumber() == 3 and closest_enemy == nil) then
+        -- Find the bomb
+        local bomb = entities.FindByClass("CPlantedC4")[1];
+
+        -- We have a bomb
+        if (bomb ~= nil and bomb:GetPropBool("m_bBombDefused") == false) then
+            local bx, by, bz = bomb:GetAbsOrigin();
+            -- Check if we are within range
+            local distance = getDistanceToTarget(my_x, my_y, 0, bx, by, 0);
+            local va_x, va_y, va_z = getAngle(my_x, my_y, my_z, bx, by, bz);
+
+            if (is_defusing) then
+                cmd:SetViewAngles(va_x, va_y, va_z);
+                return;
+            end
+
+            -- Defuse when in range
+            if (distance < 0.3 and is_defusing == false) then
+                cmd:SetViewAngles(va_x, va_y, va_z);
+                client.Command("+use", true);
+                is_defusing = true;
+            end
+
+            if (distance > 0.3 and distance < 100) then
+                cmd:SetForwardMove(100);
+                cmd:SetSideMove(0);
+                cmd:SetViewAngles(va_x, va_y, va_z);
+                doMovement(va_x, va_y, va_z, cmd);
+                moving_to_defuse = true;
+                return;
+            end
+
+            moving_to_defuse = false;
+
+            if (last_target_time == nil or globals.TickCount() - last_target_time > RETARGET_TIMEOUT) then
+                last_target_time = globals.TickCount();
+                path_to_follow = nil;
+                current_index = nil;
+                next_target = getClosestMesh(bx, by, bz);
+            end
         end
     end
 
     -- If we currently don't have a target, get the closest mesh
-    if (path_to_follow == nil and (last_reset == nil or globals.TickCount() - last_reset > RESET_TIMEOUT)) then
+    if (moving_to_defuse == false and path_to_follow == nil and (last_reset == nil or globals.TickCount() - last_reset > RESET_TIMEOUT)) then
         last_reset = globals.TickCount();
-        local start_point = getClosestMesh(my_x, my_y, my_z, map);
+        local start_point = getClosestMesh(my_x, my_y, my_z);
         local end_point;
         if (next_target ~= nil) then
             end_point = next_target;
             next_target = nil;
         else
-            end_point = map['nodes'][math.random(1, #map['nodes'])];
+            end_point = current_map['nodes'][math.random(1, #current_map['nodes'])];
         end
 
-        path_to_follow = path(start_point, end_point, map['nodes'], map['edges'], false);
+        path_to_follow = path(start_point, end_point, current_map['nodes'], current_map['edges'], false);
 
         if (path_to_follow == nil) then
             return;
@@ -241,8 +231,13 @@ function moveEventHandler(cmd)
 
     -- Start the path
     if (current_index == nil) then
-        current_index = 1;
+        local first_point = path_to_follow[1];
 
+        if (first_point ~= nil and next_point ~= nil and first_point.x == next_point.x and first_point.y == next_point.y and first_point.z == next_point.z) then
+            current_index = 2;
+        else
+            current_index = 1;
+        end
         -- Path ended, reset and retrieve a new path
     elseif (current_index == #path_to_follow) then
         current_index = nil;
@@ -276,6 +271,8 @@ function moveEventHandler(cmd)
         return;
     end
 
+    next_point = path_to_follow[current_index + 1];
+
     local distance = getDistanceToTarget(my_x, my_y, 0, target["x"], target["y"], 0);
 
     -- We're close enough to the center of the mesh, pick the next target for 'smoothing' reasons
@@ -288,6 +285,7 @@ function moveEventHandler(cmd)
     cmd:SetSideMove(0);
     -- Calculating the angle from the current target (absolute position)
     local wa_x, wa_y, wa_z = getAngle(my_x, my_y, my_z, target["x"], target["y"], target["z"]);
+    cmd:SetViewAngles(wa_x, wa_y, wa_z);
     doMovement(wa_x, wa_y, wa_z, cmd);
 end
 
@@ -311,6 +309,17 @@ function gameEventHandler(event)
         speed_slow_since = nil;
         path_to_follow = nil;
         current_index = nil;
+        client.Command("-use", true);
+        is_defusing = false;
+    end
+
+    if (event:GetName() == "round_freeze_end") then
+       round_started = true;
+    end
+
+    if (event:GetName() == "round_officially_ended") then
+        round_started = false;
+        moving_to_defuse = false;
     end
 
     if (event:GetName() == "player_death") then
@@ -337,10 +346,10 @@ function gameEventHandler(event)
     end
 end
 
-function getClosestMesh(my_x, my_y, my_z, map)
+function getClosestMesh(my_x, my_y, my_z)
     local closestMesh;
     local closestDistance;
-    local nodes = map["nodes"];
+    local nodes = current_map["nodes"];
 
     for k, v in pairs(nodes) do
         if (v ~= nil) then
@@ -387,20 +396,71 @@ function getClosestPlayer(my_x, my_y, my_z)
     return closestPlayer;
 end
 
-function getActiveMap()
-    local map_override = WALKBOT_MAP_OVERRIDE:GetValue();
-    local map_name = client.GetConVar("host_map");
-    if (map_name == nil and map_override ~= "") then
-        return;
+function doTimerReset()
+    if (last_reset ~= nil and last_reset > globals.TickCount()) then
+        last_reset = globals.TickCount();
     end
 
-    if (map_override ~= "") then
-        map_name = map_override .. ".bsp";
+    if (last_command ~= nil and last_command > globals.TickCount()) then
+        last_command = globals.TickCount();
     end
 
-    return maps[map_name];
+    if (last_target_time ~= nil and last_target_time > globals.TickCount()) then
+        last_target_time = globals.TickCount();
+    end
+
+    if (aimbot_target_change_time ~= nil and aimbot_target_change_time > globals.TickCount()) then
+        aimbot_target_change_time = globals.TickCount();
+    end
+
+    if (last_shot ~= nil and last_shot > globals.TickCount()) then
+        last_shot = globals.TickCount();
+    end
 end
 
+function doStuckCheck(cmd)
+    -- If we've been stopped for a while, let's try to get unstuck
+    if (speed_slow_since ~= nil) then
+
+        if (globals.TickCount() - speed_slow_since > STUCK_TIMEOUT) then
+            path_to_follow = nil;
+            current_index = nil;
+            speed_slow_since = nil;
+            return;
+        end
+
+        if (globals.TickCount() - speed_slow_since > 80) then
+            -- Move left or right randomly
+            if (math.random() * 2 == 1) then
+                cmd:SetSideMove(250);
+            end
+
+            -- Move forward or back randomly
+            if (math.random() * 2 == 1) then
+                cmd:SetForwardMove(250);
+            end
+        end
+
+        if (globals.TickCount() - speed_slow_since > 60) then
+            if (math.random() * 2 == 1) then
+                -- Press CTRL to jump
+                cmd:SetButtons(4);
+            else
+                -- Press leftclick to attack
+                cmd:SetButtons(1);
+            end
+        elseif (globals.TickCount() - speed_slow_since > 40) then
+            -- Press spacebar to jump
+            cmd:SetButtons(2);
+        elseif (globals.TickCount() - speed_slow_since > 20) then
+            -- Press E to open any doors
+            cmd:SetButtons(32);
+        end
+    end
+end
+
+client.AllowListener("round_freeze_end");
+client.AllowListener("round_officially_ended");
 callbacks.Register("Draw", "walkbot_draw_event", drawEventHandler);
 callbacks.Register("FireGameEvent", "walkbot_game_event", gameEventHandler);
 callbacks.Register("CreateMove", "walkbot_move", moveEventHandler);
@@ -408,7 +468,6 @@ callbacks.Register("AimbotTarget", "walkbot_aimbot_target", aimbotTargetHandler)
 
 -- Movements and calculations
 function doMovement(wa_x, wa_y, wa_z, cmd)
-    cmd:SetViewAngles(wa_x, wa_y, wa_z);
     local va_x, va_y, va_z = cmd:GetViewAngles();
     local d_v;
     local f1, f2;
@@ -434,6 +493,65 @@ function doMovement(wa_x, wa_y, wa_z, cmd)
     d_v = 360.0 - d_v;
     cmd:SetForwardMove(math.cos(d_v * (math.pi / 180)) * cmd:GetForwardMove() + math.cos((d_v + 90.) * (math.pi / 180)) * cmd:GetSideMove());
     cmd:SetSideMove(math.sin(d_v * (math.pi / 180)) * cmd:GetForwardMove() + math.sin((d_v + 90.) * (math.pi / 180)) * cmd:GetSideMove());
+end
+
+function doSmartReload(my_weapon, cmd)
+    if (WALKBOT_AUTORELOAD_CB:GetValue() == true and my_weapon == nil) then
+        if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
+            client.Command("slot2", true);
+            client.Command("slot1", true);
+            last_command = globals.TickCount();
+        end
+        return;
+    end
+
+    if (WALKBOT_AUTORELOAD_CB:GetValue() == true and my_weapon ~= nil) then
+        local weapon_name = my_weapon:GetClass();
+        weapon_name = weapon_name:gsub("CWeapon", "");
+        weapon_name = weapon_name:lower();
+
+        if (weapon_name:sub(1, 1) == "c") then
+            weapon_name = weapon_name:sub(2)
+        end
+
+        if (weapon_name == "c4" and (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT))) then
+            client.Command("drop", true);
+            last_command = globals.TickCount();
+            return;
+        end
+
+        local ammo = my_weapon:GetPropInt("m_iClip1");
+        local ammo_reserve = my_weapon:GetPropInt("m_iPrimaryReserveAmmoCount");
+
+        if (ammo == 0 and ammo_reserve == 0) then
+            if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
+                client.Command("drop", true);
+                last_command = globals.TickCount();
+            end
+        end
+
+        if (weapon_name == "knife" or weapon_name == "smokegrenade" or weapon_name == "flashbang" or weapon_name == "molotovgrenade" or weapon_grenade == "hegrenade") then
+            if (last_command == nil or globals.TickCount() - last_command > (COMMAND_TIMEOUT)) then
+                client.Command("slot2", true);
+                client.Command("slot1", true);
+                last_command = globals.TickCount();
+            end
+        end
+
+        -- Determine if we need to reload
+        if (not is_shooting and aimbot_target == nil) then
+            if (
+            ((weapon_name == "glock" or weapon_name == "elite" or weapon_name == "p250" or weapon_name == "cz75a" or weapon_name == "tec9" or weapon_name == "hkp2000" or weapon_name == "fiveseven") and ammo < RELOAD_THRESHOLD_PISTOL)
+                    or ((weapon_name == "mac10" or weapon_name == "mp7" or weapon_name == "ump45" or weapon_name == "p90" or weapon_name == "bizon" or weapon_name == "mp9") and ammo < RELOAD_THRESHOLD_SMG)
+                    or ((weapon_name == "deagle" or weapon_name == "awp" or weapon_name == "g3sg1" or weapon_name == "ssg08" or weapon_name == "scar20") and ammo < RELOAD_THRESHOLD_SNIPER)
+                    or ((weapon_name == "nova" or weapon_name == "xm1014" or weapon_name == "sawedoff" or weapon_name == "mag7") and ammo < RELOAD_THRESHOLD_SHOTGUN)
+                    or ((weapon_name == "m249" or weapon_name == "negev") and ammo < RELOAD_THRESHOLD_HEAVY)
+                    or ((weapon_name == "galilar" or weapon_name == "ak47" or weapon_name == "sg556" or weapon_name == "famas" or weapon_name == "m4a1" or weapon_name == "m4a1_silencer" or weapon_name == "aug") and ammo < RELOAD_THRESHOLD_RIFLE)
+            ) then
+                cmd:SetButtons(8192);
+            end
+        end
+    end
 end
 
 function vectorAngles(d_x, d_y, d_z)
