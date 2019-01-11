@@ -21,6 +21,7 @@ local WALKBOT_DRAWING_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Mov
 local WALKBOT_TARGET_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_TARGET_CB", "Walkbot Target Enemies", false);
 local WALKBOT_AUTORELOAD_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTORELOAD_CB", "Walkbot Smart Reload", false);
 local WALKBOT_AUTODEFUSE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTODEFUSE_CB", "Walkbot Autodefuse", false);
+local WALKBOT_ANTIKICK_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ANTIKICK_CB", "Walkbot Anti-Kick", false);
 
 local last_command = globals.TickCount();
 local aimbot_target_change_time = globals.TickCount();
@@ -33,6 +34,7 @@ local is_shooting;
 local is_defusing = false;
 local moving_to_defuse = false;
 local round_started;
+local kick_command_id = 1;
 
 local current_map;
 local current_map_name;
@@ -296,6 +298,34 @@ function aimbotTargetHandler(ent)
     end
 end
 
+function kickEventHandler(event)
+    local self_pid = client.GetLocalPlayerIndex();
+    local self = entities.GetLocalPlayer();
+
+    if (WALKBOT_ANTIKICK_CB:GetValue() == false or self_pid == nil or self == nil or current_map_name == nil) then
+        return;
+    end
+
+    if (event:GetName() == "vote_cast") then
+        local vote_option = event:GetInt("vote_option");
+        local voter_eid = event:GetInt('entityid');
+
+        -- We voted f2 (automatically), so someone is kicking us
+        if (self_pid == voter_eid and vote_option == 1) then
+            if (kick_command_id == 1) then
+                client.Command("callvote SwapTeams");
+                kick_command_id = 2;
+            elseif (kick_command_id == 2) then
+                client.Command("callvote ScrambleTeams");
+                kick_command_id = 3;
+            elseif (kick_command_id == 3) then
+                client.Command("callvote ChangeLevel " .. current_map_name);
+                kick_command_id = 1;
+            end
+        end
+    end
+end
+
 function gameEventHandler(event)
     local self_pid = client.GetLocalPlayerIndex();
     local self = entities.GetLocalPlayer();
@@ -314,7 +344,7 @@ function gameEventHandler(event)
     end
 
     if (event:GetName() == "round_freeze_end") then
-       round_started = true;
+        round_started = true;
     end
 
     if (event:GetName() == "round_officially_ended") then
@@ -459,10 +489,12 @@ function doStuckCheck(cmd)
     end
 end
 
+client.AllowListener("vote_cast");
 client.AllowListener("round_freeze_end");
 client.AllowListener("round_officially_ended");
 callbacks.Register("Draw", "walkbot_draw_event", drawEventHandler);
 callbacks.Register("FireGameEvent", "walkbot_game_event", gameEventHandler);
+callbacks.Register("FireGameEvent", "walkbot_antikick_event", kickEventHandler);
 callbacks.Register("CreateMove", "walkbot_move", moveEventHandler);
 callbacks.Register("AimbotTarget", "walkbot_aimbot_target", aimbotTargetHandler);
 
