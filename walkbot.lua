@@ -307,7 +307,10 @@ end
 function kickEventHandler(event)
     local self_pid = client.GetLocalPlayerIndex();
     local self = entities.GetLocalPlayer();
-    current_map_name = engine.GetMapName();
+    local this_map_name = engine.GetMapName();
+    if (current_map_name == nil and this_map_name ~= nil and current_map_name ~= this_map_name) then
+        current_map_name = engine.GetMapName();
+    end
 
     if (WALKBOT_ANTIKICK_CB:GetValue() == false or self_pid == nil or self == nil or current_map_name == nil) then
         return;
@@ -374,7 +377,7 @@ function gameEventHandler(event)
     end
 
     if (event:GetName() == "round_freeze_end") then
-       round_started = true;
+        round_started = true;
     end
 
     if (event:GetName() == "round_officially_ended") then
