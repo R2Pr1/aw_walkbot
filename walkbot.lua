@@ -97,17 +97,7 @@ function moveEventHandler(cmd)
         return;
     end
 
-    if (current_map_name ~= active_map_name) then
-        -- Newer format (de_dust2)
-        current_map = maps[active_map_name];
-
-        -- Support for older versions that use the naming convention de_dust.bsp
-        if (current_map == nil) then
-            current_map = maps[active_map_name .. ".bsp"];
-        end
-
-        current_map_name = active_map_name;
-    end
+    updateMap(active_map_name);
 
     local me = entities.GetLocalPlayer();
 
@@ -304,13 +294,30 @@ function aimbotTargetHandler(ent)
     end
 end
 
+function updateMap(active_map_name)
+    if (current_map_name ~= active_map_name) then
+        -- Newer format (de_dust2)
+        current_map = maps[active_map_name];
+
+        -- Support for older versions that use the naming convention de_dust.bsp
+        if (current_map == nil) then
+            current_map = maps[active_map_name .. ".bsp"];
+        end
+
+        current_map_name = active_map_name;
+    end
+end
+
 function kickEventHandler(event)
     local self_pid = client.GetLocalPlayerIndex();
     local self = entities.GetLocalPlayer();
     local this_map_name = engine.GetMapName();
-    if (current_map_name == nil and this_map_name ~= nil and current_map_name ~= this_map_name) then
-        current_map_name = engine.GetMapName();
+
+    if (this_map_name == nil) then
+        return;
     end
+
+    updateMap(this_map_name);
 
     if (WALKBOT_ANTIKICK_CB:GetValue() == false or self_pid == nil or self == nil or current_map_name == nil) then
         return;
