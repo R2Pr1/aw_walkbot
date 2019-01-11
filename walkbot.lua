@@ -22,6 +22,7 @@ local WALKBOT_TARGET_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Move
 local WALKBOT_AUTORELOAD_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTORELOAD_CB", "Walkbot Smart Reload", false);
 local WALKBOT_AUTODEFUSE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTODEFUSE_CB", "Walkbot Autodefuse", false);
 local WALKBOT_ANTIKICK_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ANTIKICK_CB", "Walkbot Anti-Kick", false);
+local ANTIKICK_VOTE_THRESHOLD = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "ANTIKICK_VOTE_THRESHOLD", "Scramble threshold %:", 80, 1, 100);
 
 local last_command = globals.TickCount();
 local aimbot_target_change_time = globals.TickCount();
@@ -35,6 +36,10 @@ local is_defusing = false;
 local moving_to_defuse = false;
 local round_started;
 local kick_command_id = 1;
+local kick_potential_votes = 0;
+local kick_yes_voters = 0;
+local kick_getting_kicked = false;
+local kick_last_command_time = globals.CurTime();
 
 local current_map;
 local current_map_name;
@@ -287,6 +292,7 @@ function moveEventHandler(cmd)
     cmd:SetSideMove(0);
     -- Calculating the angle from the current target (absolute position)
     local wa_x, wa_y, wa_z = getAngle(my_x, my_y, my_z, target["x"], target["y"], target["z"]);
+
     cmd:SetViewAngles(wa_x, wa_y, wa_z);
     doMovement(wa_x, wa_y, wa_z, cmd);
 end
@@ -301,17 +307,37 @@ end
 function kickEventHandler(event)
     local self_pid = client.GetLocalPlayerIndex();
     local self = entities.GetLocalPlayer();
-
     if (WALKBOT_ANTIKICK_CB:GetValue() == false or self_pid == nil or self == nil or current_map_name == nil) then
+        return;
+    end
+
+    if (event:GetName() == "vote_changed") then
+        kick_potential_votes = event:GetInt("potentialVotes");
         return;
     end
 
     if (event:GetName() == "vote_cast") then
         local vote_option = event:GetInt("vote_option");
-        local voter_eid = event:GetInt('entityid');
+        local voter_eid = event:GetInt("entityid");
 
-        -- We voted f2 (automatically), so someone is kicking us
+        if (self_pid ~= voter_eid and vote_option == 0) then
+            kick_yes_voters = kick_yes_voters + 1;
+        end
+
         if (self_pid == voter_eid and vote_option == 1) then
+            kick_getting_kicked = true;
+
+            -- We're voting NO, which means somebody else already voted yes
+            kick_yes_voters = 1;
+        end
+
+        if (kick_getting_kicked == false) then
+            return;
+        end
+
+        local kick_percentage = ((kick_yes_voters - 1) / (kick_potential_votes / 2) * 100);
+
+        if (kick_yes_voters > 0 and kick_potential_votes > 0 and kick_percentage >= ANTIKICK_VOTE_THRESHOLD:GetValue() and globals.CurTime() - kick_last_command_time > 90) then
             if (kick_command_id == 1) then
                 client.Command("callvote SwapTeams");
                 kick_command_id = 2;
@@ -322,6 +348,8 @@ function kickEventHandler(event)
                 client.Command("callvote ChangeLevel " .. current_map_name);
                 kick_command_id = 1;
             end
+
+            kick_last_command_time = globals.CurTime();
         end
     end
 end
@@ -344,7 +372,7 @@ function gameEventHandler(event)
     end
 
     if (event:GetName() == "round_freeze_end") then
-        round_started = true;
+       round_started = true;
     end
 
     if (event:GetName() == "round_officially_ended") then
@@ -489,6 +517,7 @@ function doStuckCheck(cmd)
     end
 end
 
+client.AllowListener("vote_changed");
 client.AllowListener("vote_cast");
 client.AllowListener("round_freeze_end");
 client.AllowListener("round_officially_ended");
