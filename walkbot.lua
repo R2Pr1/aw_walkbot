@@ -23,6 +23,7 @@ local WALKBOT_AUTORELOAD_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "
 local WALKBOT_AUTODEFUSE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTODEFUSE_CB", "Walkbot Autodefuse", false);
 local WALKBOT_ANTIKICK_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ANTIKICK_CB", "Walkbot Anti-Kick", false);
 local ANTIKICK_VOTE_THRESHOLD = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "ANTIKICK_VOTE_THRESHOLD", "Scramble threshold %:", 80, 1, 100);
+local WALKBOT_SMOOTHING_SLIDER = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_SMOOTHING_SLIDER", "Angle Smoothing", 3, 1, 5);
 
 local last_command = globals.TickCount();
 local aimbot_target_change_time = globals.TickCount();
@@ -39,7 +40,7 @@ local kick_command_id = 1;
 local kick_potential_votes = 0;
 local kick_yes_voters = 0;
 local kick_getting_kicked = false;
-local kick_last_command_time = globals.CurTime();
+local kick_last_command_time;
 
 local current_map;
 local current_map_name;
@@ -230,7 +231,12 @@ function moveEventHandler(cmd)
     if (current_index == nil) then
         local first_point = path_to_follow[1];
 
-        if (first_point ~= nil and next_point ~= nil and first_point.x == next_point.x and first_point.y == next_point.y and first_point.z == next_point.z) then
+        if (first_point ~= nil and next_point ~= nil and
+            (
+                (first_point.x == next_point.x and first_point.y == next_point.y and first_point.z == next_point.z)
+                or (getDistanceToTarget(my_x, my_y, my_z, next_point.x, next_point.z, next_point.y) < getDistanceToTarget(my_x, my_y, my_z, first_point.x, first_point.z, first_point.y))
+            )
+        ) then
             current_index = 2;
         else
             current_index = 1;
@@ -282,8 +288,11 @@ function moveEventHandler(cmd)
     cmd:SetSideMove(0);
     -- Calculating the angle from the current target (absolute position)
     local wa_x, wa_y, wa_z = getAngle(my_x, my_y, my_z, target["x"], target["y"], target["z"]);
-
-    cmd:SetViewAngles(wa_x, wa_y, wa_z);
+    local ma_x, ma_y, ma_z = me:GetProp("m_angEyeAngles");
+    local smoothing_factor = WALKBOT_SMOOTHING_SLIDER:GetValue();
+    local new_x, new_y, new_z = ma_x - ((ma_x - wa_x) / smoothing_factor), ma_y - ((ma_y - wa_y) / smoothing_factor), ma_z - ((ma_z - wa_z) / smoothing_factor);
+    new_x, new_y, new_z = normalizeAngles(new_x, new_y, new_z);
+    cmd:SetViewAngles(new_x, new_y, new_z);
     doMovement(wa_x, wa_y, wa_z, cmd);
 end
 
@@ -323,6 +332,11 @@ function kickEventHandler(event)
         return;
     end
 
+    if (event:GetName() == "game_start") then
+        kick_last_command_time = nil;
+        return;
+    end
+
     if (event:GetName() == "vote_changed") then
         kick_potential_votes = event:GetInt("potentialVotes");
         return;
@@ -349,7 +363,7 @@ function kickEventHandler(event)
 
         local kick_percentage = ((kick_yes_voters - 1) / (kick_potential_votes / 2) * 100);
 
-        if (kick_yes_voters > 0 and kick_potential_votes > 0 and kick_percentage >= ANTIKICK_VOTE_THRESHOLD:GetValue() and globals.CurTime() - kick_last_command_time > 90) then
+        if (kick_yes_voters > 0 and kick_potential_votes > 0 and kick_percentage >= ANTIKICK_VOTE_THRESHOLD:GetValue() and (kick_last_command_time == nil or globals.CurTime() - kick_last_command_time > 120)) then
             if (kick_command_id == 1) then
                 client.Command("callvote SwapTeams");
                 kick_command_id = 2;
@@ -512,12 +526,10 @@ function doStuckCheck(cmd)
         end
 
         if (globals.TickCount() - speed_slow_since > 60) then
-            if (math.random() * 2 == 1) then
-                -- Press CTRL to jump
-                cmd:SetButtons(4);
-            else
-                -- Press leftclick to attack
+            if (cmd:GetButtons() == 4 and math.random() * 2 == 1) then
                 cmd:SetButtons(1);
+            else
+                cmd:SetButtons(4);
             end
         elseif (globals.TickCount() - speed_slow_since > 40) then
             -- Press spacebar to jump
@@ -529,6 +541,7 @@ function doStuckCheck(cmd)
     end
 end
 
+client.AllowListener("game_start");
 client.AllowListener("vote_changed");
 client.AllowListener("vote_cast");
 client.AllowListener("round_freeze_end");
