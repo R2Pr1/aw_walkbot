@@ -16,14 +16,24 @@ local RELOAD_THRESHOLD_RIFLE = 10;
 local RELOAD_THRESHOLD_SHOTGUN = 3;
 local RELOAD_THRESHOLD_HEAVY = 30;
 
+local SCRIPT_FILE_NAME = GetScriptName();
+local SCRIPT_FILE_ADDR = "https://raw.githubusercontent.com/hyperthegreat/aw_walkbot/master/walkbot.lua";
+local VERSION_FILE_ADDR = "https://raw.githubusercontent.com/hyperthegreat/aw_walkbot/master/version.txt";
+local VERSION_NUMBER = "1.0.0";
+local version_check_done = false;
+local update_downloaded = false;
+local update_available = false;
+
 local WALKBOT_ENABLE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ENABLE_CB", "Enable Walkbot", false);
 local WALKBOT_DRAWING_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_DRAWING_CB", "Walkbot Drawing", false);
 local WALKBOT_TARGET_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_TARGET_CB", "Walkbot Target Enemies", false);
 local WALKBOT_AUTORELOAD_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTORELOAD_CB", "Walkbot Smart Reload", false);
 local WALKBOT_AUTODEFUSE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_AUTODEFUSE_CB", "Walkbot Autodefuse", false);
-local WALKBOT_ANTIKICK_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ANTIKICK_CB", "Walkbot Anti-Kick", false);
-local ANTIKICK_VOTE_THRESHOLD = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "ANTIKICK_VOTE_THRESHOLD", "Scramble threshold %:", 80, 1, 100);
-local WALKBOT_SMOOTHING_SLIDER = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_SMOOTHING_SLIDER", "Angle Smoothing", 3, 1, 5);
+local WALKBOT_ANTIKICK_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Other"), "WALKBOT_ANTIKICK_CB", "Walkbot Anti-Kick", false);
+local ANTIKICK_VOTE_THRESHOLD = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Other"), "ANTIKICK_VOTE_THRESHOLD", "Scramble threshold %:", 80, 1, 100);
+local WALKBOT_ENABLE_SETANGLE_CB = gui.Checkbox(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_ENABLE_SETANGLE_CB", "Walkbot Change Angles", false);
+local WALKBOT_SMOOTHING_SLIDER = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_SMOOTHING_SLIDER", "Walkbot Angle Smoothing", 40, 1, 100);
+local WALKBOT_MOVEMENT_SPEED = gui.Slider(gui.Reference("MISC", "AUTOMATION", "Movement"), "WALKBOT_MOVEMENT_SPEED", "Walkbot walking speed", 250, 0, 250);
 
 local last_command = globals.TickCount();
 local aimbot_target_change_time = globals.TickCount();
@@ -41,6 +51,7 @@ local kick_potential_votes = 0;
 local kick_yes_voters = 0;
 local kick_getting_kicked = false;
 local kick_last_command_time;
+local last_ax, last_ay, last_az;
 
 local current_map;
 local current_map_name;
@@ -48,6 +59,42 @@ local next_target;
 local path_to_follow;
 local next_point;
 local current_index;
+
+function updateEventHandler()
+    if (update_available and not update_downloaded) then
+        if (gui.GetValue("lua_allow_cfg") == false) then
+            draw.Color(255, 0, 0, 255);
+            draw.Text(0, 0, "[Walkbot] An update is available, please enable Lua Allow Config and Lua Editing in the settings tab");
+        else
+            local new_version_content = http.Get(SCRIPT_FILE_ADDR);
+            local old_script = file.Open(SCRIPT_FILE_NAME, "w");
+            old_script:Write(new_version_content);
+            old_script:Close();
+            update_available = false;
+            update_downloaded = true;
+        end
+    end
+
+    if (update_downloaded) then
+        draw.Color(255, 0, 0, 255);
+        draw.Text(0, 0, "[Walkbot] An update has automatically been downloaded, please reload the shared esp script");
+        return;
+    end
+
+    if (not version_check_done) then
+        if (gui.GetValue("lua_allow_http") == false) then
+            draw.Color(255, 0, 0, 255);
+            draw.Text(0, 0, "[Walkbot] Please enable Lua HTTP Connections in your settings tab to use this script");
+            return;
+        end
+
+        version_check_done = true;
+        local version = http.Get(VERSION_FILE_ADDR);
+        if (version ~= VERSION_NUMBER) then
+            update_available = true;
+        end
+    end
+end
 
 function drawEventHandler()
     if (WALKBOT_ENABLE_CB:GetValue() == false) then
@@ -124,10 +171,29 @@ function moveEventHandler(cmd)
 
     doTimerReset();
 
+    local my_x, my_y, my_z = me:GetAbsOrigin();
+    if (is_defusing) then
+        local bombs = entities.FindByClass("CPlantedC4");
+        local bomb;
+        for i=1, #bombs do
+            if (bombs[i]:IsAlive()) then
+                bomb = bombs[i];
+            end
+        end
+
+        local bx, by, bz = bomb:GetAbsOrigin();
+        local va_x, va_y, va_z = getAngle(my_x, my_y, my_z + 64, bx, by, bz);
+
+        next_target = nil;
+        path_to_follow = nil;
+        current_index = nil;
+        cmd:SetViewAngles(va_x, va_y, va_z);
+        return;
+    end
+
     local my_weapon = me:GetPropEntity("m_hActiveWeapon");
     doSmartReload(my_weapon, cmd);
 
-    local my_x, my_y, my_z = me:GetAbsOrigin();
 
     if (is_shooting and (last_shot == nil or globals.TickCount() - last_shot > SHOT_TIMEOUT)) then
         is_shooting = false;
@@ -148,8 +214,6 @@ function moveEventHandler(cmd)
         return;
     end
 
-    doStuckCheck(cmd);
-
     local closest_enemy = getClosestPlayer(my_x, my_y, my_z);
     -- Auto enemy targeting
     if (WALKBOT_TARGET_CB:GetValue() == true and (last_target_time == nil or globals.TickCount() - last_target_time > RETARGET_TIMEOUT)) then
@@ -165,37 +229,37 @@ function moveEventHandler(cmd)
     -- Auto defusing
     if (WALKBOT_AUTODEFUSE_CB:GetValue() == true and me:GetTeamNumber() == 3 and closest_enemy == nil) then
         -- Find the bomb
-        local bomb = entities.FindByClass("CPlantedC4")[1];
+        local bombs = entities.FindByClass("CPlantedC4");
+        local bomb;
+        for i=1, #bombs do
+            if (bombs[i]:IsAlive()) then
+                bomb = bombs[i];
+            end
+        end
 
         -- We have a bomb
-        if (bomb ~= nil and bomb:GetPropBool("m_bBombDefused") == false) then
+        if (bomb ~= nil) then
             local bx, by, bz = bomb:GetAbsOrigin();
             -- Check if we are within range
             local distance = getDistanceToTarget(my_x, my_y, 0, bx, by, 0);
-            local va_x, va_y, va_z = getAngle(my_x, my_y, my_z, bx, by, bz);
+            local va_x, va_y, va_z = getAngle(my_x, my_y, 0, bx, by, 0);
 
-            if (is_defusing) then
-                cmd:SetViewAngles(va_x, va_y, va_z);
+            -- Defuse when in range
+            if (distance < 60 and is_defusing == false) then
+                is_defusing = true;
+                client.Command("+use", true);
                 return;
             end
 
-            -- Defuse when in range
-            if (distance < 0.3 and is_defusing == false) then
-                cmd:SetViewAngles(va_x, va_y, va_z);
-                client.Command("+use", true);
-                is_defusing = true;
-            end
-
-            if (distance > 0.3 and distance < 100) then
-                cmd:SetForwardMove(100);
-                cmd:SetSideMove(0);
-                cmd:SetViewAngles(va_x, va_y, va_z);
+            if (distance < 120 and is_defusing == false) then
                 doMovement(va_x, va_y, va_z, cmd);
                 moving_to_defuse = true;
+                is_defusing = false;
                 return;
             end
 
             moving_to_defuse = false;
+            is_defusing = false;
 
             if (last_target_time == nil or globals.TickCount() - last_target_time > RETARGET_TIMEOUT) then
                 last_target_time = globals.TickCount();
@@ -205,6 +269,8 @@ function moveEventHandler(cmd)
             end
         end
     end
+
+    doStuckCheck(cmd);
 
     -- If we currently don't have a target, get the closest mesh
     if (moving_to_defuse == false and path_to_follow == nil and (last_reset == nil or globals.TickCount() - last_reset > RESET_TIMEOUT)) then
@@ -284,15 +350,19 @@ function moveEventHandler(cmd)
         return;
     end
 
-    cmd:SetForwardMove(250);
-    cmd:SetSideMove(0);
     -- Calculating the angle from the current target (absolute position)
     local wa_x, wa_y, wa_z = getAngle(my_x, my_y, my_z, target["x"], target["y"], target["z"]);
-    local ma_x, ma_y, ma_z = me:GetProp("m_angEyeAngles");
     local smoothing_factor = WALKBOT_SMOOTHING_SLIDER:GetValue();
-    local new_x, new_y, new_z = ma_x - ((ma_x - wa_x) / smoothing_factor), ma_y - ((ma_y - wa_y) / smoothing_factor), ma_z - ((ma_z - wa_z) / smoothing_factor);
-    new_x, new_y, new_z = normalizeAngles(new_x, new_y, new_z);
-    cmd:SetViewAngles(new_x, new_y, new_z);
+    if (WALKBOT_ENABLE_SETANGLE_CB:GetValue()) then
+        if (last_ax == nil) then
+            last_ax, last_ay, last_az = cmd:GetViewAngles();
+        end
+
+        local new_x, new_y, new_z = last_ax - ((last_ax - wa_x) / smoothing_factor), last_ay - ((last_ay - wa_y) / smoothing_factor), last_az - ((last_az - wa_z) / smoothing_factor);
+        cmd:SetViewAngles(new_x, new_y, new_z);
+        last_ax, last_ay, last_az = new_x, new_y, new_z;
+    end
+
     doMovement(wa_x, wa_y, wa_z, cmd);
 end
 
@@ -516,12 +586,12 @@ function doStuckCheck(cmd)
         if (globals.TickCount() - speed_slow_since > 80) then
             -- Move left or right randomly
             if (math.random() * 2 == 1) then
-                cmd:SetSideMove(250);
+                cmd:SetSideMove(WALKBOT_MOVEMENT_SPEED:GetValue());
             end
 
             -- Move forward or back randomly
             if (math.random() * 2 == 1) then
-                cmd:SetForwardMove(250);
+                cmd:SetForwardMove(WALKBOT_MOVEMENT_SPEED:GetValue());
             end
         end
 
@@ -541,18 +611,6 @@ function doStuckCheck(cmd)
     end
 end
 
-client.AllowListener("game_start");
-client.AllowListener("vote_changed");
-client.AllowListener("vote_cast");
-client.AllowListener("round_freeze_end");
-client.AllowListener("round_officially_ended");
-callbacks.Register("Draw", "walkbot_draw_event", drawEventHandler);
-callbacks.Register("FireGameEvent", "walkbot_game_event", gameEventHandler);
-callbacks.Register("FireGameEvent", "walkbot_antikick_event", kickEventHandler);
-callbacks.Register("CreateMove", "walkbot_move", moveEventHandler);
-callbacks.Register("AimbotTarget", "walkbot_aimbot_target", aimbotTargetHandler);
-
--- Movements and calculations
 function doMovement(wa_x, wa_y, wa_z, cmd)
     local va_x, va_y, va_z = cmd:GetViewAngles();
     local d_v;
@@ -577,8 +635,8 @@ function doMovement(wa_x, wa_y, wa_z, cmd)
     end
 
     d_v = 360.0 - d_v;
-    cmd:SetForwardMove(math.cos(d_v * (math.pi / 180)) * cmd:GetForwardMove() + math.cos((d_v + 90.) * (math.pi / 180)) * cmd:GetSideMove());
-    cmd:SetSideMove(math.sin(d_v * (math.pi / 180)) * cmd:GetForwardMove() + math.sin((d_v + 90.) * (math.pi / 180)) * cmd:GetSideMove());
+    cmd:SetForwardMove(math.cos(d_v * (math.pi / 180)) * WALKBOT_MOVEMENT_SPEED:GetValue());
+    cmd:SetSideMove(math.sin(d_v * (math.pi / 180)) * WALKBOT_MOVEMENT_SPEED:GetValue());
 end
 
 function doSmartReload(my_weapon, cmd)
@@ -839,3 +897,15 @@ function path(start, goal, nodes, edges, ignore_cache)
 
     return resPath
 end
+
+client.AllowListener("game_start");
+client.AllowListener("vote_changed");
+client.AllowListener("vote_cast");
+client.AllowListener("round_freeze_end");
+client.AllowListener("round_officially_ended");
+callbacks.Register("Draw", "walkbot_draw_event", drawEventHandler);
+callbacks.Register("FireGameEvent", "walkbot_game_event", gameEventHandler);
+callbacks.Register("FireGameEvent", "walkbot_antikick_event", kickEventHandler);
+callbacks.Register("CreateMove", "walkbot_move", moveEventHandler);
+callbacks.Register("AimbotTarget", "walkbot_aimbot_target", aimbotTargetHandler);
+callbacks.Register("Draw", updateEventHandler);
